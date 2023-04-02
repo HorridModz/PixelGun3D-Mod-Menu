@@ -1,9 +1,17 @@
 import os
+import subprocess
+import platform
 import warnings
 import shutil
 from xml.etree import ElementTree
 
-""" Settings """
+
+class IllegalArgumentException(ValueError):
+    pass
+
+
+class FolderExistsError(FileExistsError):
+    pass
 
 
 class Logging:
@@ -14,8 +22,8 @@ class Logging:
                  printveryimportant=True,
                  printsuperimportant=True,
                  printspecial=True,
-                 donotprintspecial=False,
                  donotprintsuccessinfo=False,
+                 overridedonotprintifspecial=True,
                  printall=True,
                  printnone=False,
                  ):
@@ -25,8 +33,8 @@ class Logging:
         self.printveryimportant = printveryimportant
         self.printsuperimportant = printsuperimportant
         self.printspecial = printspecial
-        self.donotprintspecial = donotprintspecial
         self.donotprintsuccessinfo = donotprintsuccessinfo
+        self.overridedonotprintifspecial = overridedonotprintifspecial
         self.printall = printall
         self.printnone = printnone
         self.Log = []
@@ -34,12 +42,11 @@ class Logging:
     def log(self, message: str, important=True, veryimportant=False, superimportant=False, successinfo=False, special=False):
         # Todo: Colored logs
         self.Log.append(message)
-        if self.printnone:
-            return
-        if successinfo and self.donotprintsuccessinfo:
-            return
-        if special and self.donotprintspecial:
-            return
+        if not(special and self.overridedonotprintifspecial):
+            if self.printnone:
+                return
+            if successinfo and self.donotprintsuccessinfo:
+                return
         if superimportant and (self.printsuperimportant or self.printall):
             if self.colorized:
                 self.printmessage_colorized(message, "SuperImportant", special)
@@ -258,15 +265,15 @@ def removefile(path, loggingimportance=False):
         logging.log(f"Successfully removed file {path}", loggingimportance, successinfo=True)
 
 
-def copydirectory(oldpath, newpath, cancelifoverwrite=False, loggingimportance=False):
+def copydirectory(oldpath, newpath, cancelifexists=False, loggingimportance=False):
     logging.log(f"Copying directory {oldpath} to {newpath}...", loggingimportance)
     assertfolderexists(oldpath)
-    if os.path.exists(newpath):
-        if cancelifoverwrite:
+    if path.isdir(newpath):
+        if cancelifexists:
             raise Exception(f"Directory {newpath} already exists")
         else:
             logging.log(f"Overwriting directory {newpath}...", True, special=True)
-            removedirectory(newpath)
+            removedirectory(newpath, loggingimportance=False)
     # noinspection PyExceptClausesOrder
     try:
         shutil.copytree(oldpath, newpath)
@@ -282,15 +289,16 @@ def copydirectory(oldpath, newpath, cancelifoverwrite=False, loggingimportance=F
         logging.log(f"Successfully copied directory {oldpath} to {newpath}", loggingimportance, successinfo=True)
 
 
-def copyfile(oldpath, newpath, cancelifoverwrite=False, loggingimportance=False):
+def copyfile(oldpath, newpath, cancelifexists=False, loggingimportance=False):
     logging.log(f"Copying file {oldpath} to {newpath}...", loggingimportance)
     assertfileexists(oldpath)
-    if os.path.exists(newpath):
-        if cancelifoverwrite:
+    if os.path.isfile(newpath):
+        if cancelifexists:
             raise Exception(f"File {newpath} already exists")
         else:
             logging.log(f"Overwriting file {newpath}...", True, special=True)
-            removefile(newpath)
+            removefile(newpath, loggingimportance=False)
+    # noinspection PyExceptClausesOrder
     try:
         shutil.copy(oldpath, newpath)
     except OSError as exception:
@@ -304,6 +312,29 @@ def copyfile(oldpath, newpath, cancelifoverwrite=False, loggingimportance=False)
     else:
         logging.log(f"Successfully copied file {oldpath} to {newpath}", loggingimportance, successinfo=True)
 
+
+def createdirectory(path, overwriteifexists=False, loggingimportance=False):
+    logging.log(f"Creating directory {path}...", loggingimportance)
+    if os.path.isdir(path):
+            logging.log(f"Directory {path} already exists", loggingimportance, successinfo=True)
+            if overwriteifexists:
+                logging.log(f"Overwriting directory {path}...", True, special=True)
+                removedirectory(path, loggingimportance=False)
+            else:
+                return
+    # noinspection PyExceptClausesOrder
+    try:
+        os.mkdir(path)
+    except OSError as exception:
+        # raise OSError(exception)
+        logging.warning(f"OSError exception occurred creating directory {path}: {exception}. Ignoring exception.")
+    except IOError as exception:
+        # raise IOError(exception)
+        logging.warning(f"IOError exception occurred creating directory {path}: {exception}. Ignoring exception.")
+    except Exception as exception:
+        logging.warning(f"Exception occurred creating directory {path}: {exception}. Ignoring exception.")
+    else:
+        logging.log(f"Successfully created directory {path}", loggingimportance, successinfo=True)
 
 def assertfileexists(path):
     if os.path.isdir(path):
@@ -331,6 +362,15 @@ def getimmediate(directory, folders=True, files=True):
         return []
 
 
+def removefileextension(path):
+    return os.path.splitext(path)[0]
+
+
+def getfileextension(path):
+    fileextension = os.path.splitext(path)[1]
+    return readaftersubstring(".", fileextension) if fileextension != "" else ""
+
+
 class ModMenuInstall:
     def __init__(self,
                  apkpath,
@@ -353,34 +393,53 @@ class ModMenuInstall:
         logging.log("Preparing for mod menu installation...", True, True, True)
         paths = {"apkpath": apkpath, "newapkpath": newapkpath, "modmenuapkpath": modmenuapkpath}
         for pathname, path in zip(paths.keys(), paths.values()):
-            if path.endswith(".apk"):
+            if getfileextension(path) == "apk":
                 # Though assertfolderexists will work fine, it may save someone trouble to give them a more direct
                 # error message if they accidentally supply an apk file rather than a decompiled apk folder
                 if pathname == "newapkpath":
-                    raise Exception(f"Expected folder for {pathname}, got apk file {path}")
+                    raise IllegalArgumentException(f"Expected folder for {pathname}, got apk file {path}")
                 else:
-                    raise Exception(f"Expected decompiled apk folder for {pathname}, got apk file {path}")
+                    raise IllegalArgumentException(f"Expected decompiled apk folder for {pathname}, got apk file"
+                                                   f" {path}")
         assertfolderexists(apkpath)
         assertfolderexists(modmenuapkpath)
-        if not modmenulibname.endswith(".so"):
-            raise Exception(f"Expected name of mod menu lib file, ex \"libModMenu.so\", got {modmenulibname}."
+        if getfileextension(modmenulibname) != "so":
+            raise IllegalArgumentException(f"Expected name of mod menu lib file, ex \"libModMenu.so\", got {modmenulibname}."
                             f" Did you forget to add '.so' to the end?")
         self.apkpath = os.path.normpath(apkpath)
         self.newapkpath = os.path.normpath(newapkpath)
         self.modmenuapkpath = os.path.normpath(modmenuapkpath)
         self.modmenulibname = modmenulibname
         self.deletelibs = deletelibs
-        if os.path.exists(self.newapkpath) and cancelifexists:
-            raise Exception(f"Modded apk already exists at path {self.newapkpath}.")
-        if os.path.exists(self.newapkpath) and not overwriteifexists:
-            logging.log(f"Modded apk already exists at path {self.newapkpath}."
-                f" Using this modded apk instead of overwriting it.",
-                True, True, special=True)
-            self.newapkalreadyexists = True
+        # if os.path.isdir(self.newapkpath):
+        #     if cancelifexists:
+        #         raise FolderExistsError(f"Modded apk already exists at path {self.newapkpath}.")
+        #     elif not overwriteifexists:
+        #         logging.log(f"Modded apk already exists at path {self.newapkpath}."
+        #                     f" Using this modded apk instead of overwriting it.",
+        #                     True, True, special=True)
+        #         self.newapkalreadyexists = True
+        #     else:
+        #         logging.log("Overwriting modded apk at path {self.newapkpath}...",
+        #                     True, True, special=True)
+        #         self.newapkalreadyexists = False
+        # else:
+        #     self.newapkalreadyexists = False
+        if os.path.isdir(self.newapkpath) and overwriteifexists:
+            logging.log("Overwriting modded apk at path {self.newapkpath}...",
+                        True, True, special=True)
+            self.newapkalreadyexists = False
+        elif os.path.isdir(self.newapkpath) and cancelifexists:
+                raise FolderExistsError(f"Modded apk already exists at path {self.newapkpath}.")
+        elif os.path.isdir(self.newapkpath) and not overwriteifexists:
+                logging.log(f"Modded apk already exists at path {self.newapkpath}."
+                            f" Using this modded apk instead of overwriting it.",
+                            True, True, special=True)
+                self.newapkalreadyexists = True
         else:
             self.newapkalreadyexists = False
         if not self.newapkalreadyexists:
-            copydirectory(self.apkpath, self.newapkpath, cancelifoverwrite=False, loggingimportance=True)
+            copydirectory(self.apkpath, self.newapkpath, cancelifexists=False, loggingimportance=True)
         logging.log("Collecting data for mod menu installation...", True, True, True)
         logging.log("Finding smali folders...", True, True)
         self.smalifolders = self._getsmalifolders()
@@ -425,12 +484,13 @@ class ModMenuInstall:
         try:
             mainactivity = root.findall("application/activity")[0].attrib[
                 "{http://schemas.android.com/apk/res/android}name"]
-            logging.log(f"Found mainactivity: {mainactivity}", True, successinfo=True)
-            return mainactivity
         except Exception:
             raise Exception(
                 f"Failed to determine mainactivity of apk {self.newapkpath}"
                 f" via AndroidManifest.xml at path {self.androidmanifestpath}")
+        else:
+            logging.log(f"Found mainactivity: {mainactivity}", True, successinfo=True)
+            return mainactivity
 
     def _getmainactivitypath(self, recurse=0):
         if recurse == 0:
@@ -443,7 +503,7 @@ class ModMenuInstall:
         mainactivitypath = None
         for smalifolder in self.smalifolders:
             mainactivitypath = os.path.join(smalifolder, relativepath)
-            if os.path.exists(mainactivitypath):
+            if os.path.isfile(mainactivitypath):
                 found = True
                 break
         if found:
@@ -534,7 +594,7 @@ class ModMenuInstall:
                         logging.log(f"Adding permission {addingpermission}"
                             f" next to existing permission {tryexistingpermission}"
                             f" in AndroidManifest.xml...", False)
-                    content = content.replace(tryexistingpermissionfull, f"{addingpermissionfull}\n\t{tryexistingpermissionfull}")
+                        content = content.replace(tryexistingpermissionfull, f"{addingpermissionfull}\n\t{tryexistingpermissionfull}")
                     break
             if not found:
                 raise Exception("Failed to add permissions to AndroidManifest.xml because no existing permissions "
@@ -550,7 +610,8 @@ class ModMenuInstall:
         content = read_file(self.androidmanifestpath)
         launcherservice = "<service android:name=\"com.android.support.Launcher\" android:enabled=\"true\"\n\t\tandroid:exported=\"false\" android:stopWithTask=\"true\" />"
         if launcherservice in content:
-            logging.log(f"Not adding launcher service to AndroidManifest.xml as it already exists", True, success=True)
+            logging.log(f"Not adding launcher service to AndroidManifest.xml as it already exists", True,
+                        special=True, success=True)
         else:
             if "</application>\n</manifest>" in content:
                 content = content.replace("</application>\n</manifest>",
@@ -570,7 +631,8 @@ class ModMenuInstall:
         content = read_file(self.mainactivitypath)
         lines = content.splitlines()
         if launchactivitycode in lines:
-            logging.log(f"Not adding launch activity code to mainactivity file as it already exists", True, successinfo=True)
+            logging.log(f"Not adding launch activity code to mainactivity file as it already exists", True,
+                        special=True, successinfo=True)
         else:
             if ".method protected onCreate(Landroid/os/Bundle;)V" not in content:
                 raise Exception("Failed to add launch activity code to mainactivity file because onCreate method was "
@@ -606,7 +668,7 @@ class ModMenuInstall:
         logging.log(f"Successfully created {newsmaliclassesfoldername} folder in {self.newapkpath}", False, successinfo=True)
         logging.log(f"Adding mod menu smali to {newsmaliclassesfoldername}...", False)
         copydirectory(self.modmenusmalifolder, os.path.join(newsmaliclassesfolder, os.path.basename(self.modmenusmalifolder)),
-                      cancelifoverwrite=False, loggingimportance=False)
+                      cancelifexists=False, loggingimportance=False)
         logging.log(f"Successfully added mod menu smali to {self.newapkpath}", True, successinfo=True)
 
     def addmodmenulib(self):
@@ -626,10 +688,10 @@ class ModMenuInstall:
                     modmenulibfile = os.path.join(modmenulibfolder, self.modmenulibname)
                     newlibfile = os.path.join(libfolder, self.modmenulibname)
                     logging.log(f"Adding mod menu lib {modmenulibfile} to {libfoldername}...", False)
-                    if not self.newapkalreadyexists and os.path.exists(newlibfile):
+                    if not self.newapkalreadyexists and os.path.isfile(newlibfile):
                         raise Exception(f"Lib file with same name as mod menu lib file already exists at {newlibfile}")
                     else:
-                        copyfile(modmenulibfile, newlibfile, cancelifoverwrite=False, loggingimportance=False)
+                        copyfile(modmenulibfile, newlibfile, cancelifexists=False, loggingimportance=False)
         if found:
             logging.log(f"Successfully added mod menu lib to {self.newapkpath}", True, successinfo=True)
         else:
@@ -637,7 +699,162 @@ class ModMenuInstall:
 
 
 class APKEasyTool:
+    def __init__(self,
+                 directory=None,
+                 apktoolpath=None,
+                 apksignerpath=None,
+                 zipalignpath=None,
+                 heapsizexms=None,
+                 heapsizexmx=None
+                 ):
+        # If not specified, directory defaults to current working directory
+        self.directory = directory if directory else os.path.join(os.getcwd(), "LGL Mod Menu Installer", "Temp")
+        self.defaultdecompilepath = os.path.join(self.directory, "Decompiled APKs")
+        self.defaultcompilepath = os.path.join(self.directory, "Compiled APKs")
+        self.apktoolpath = apktoolpath if apktoolpath else "apktool.jar"
+        self.apksignerpath = apksignerpath if apksignerpath else "apksigner.jar"
+        self.zipalignpath = zipalignpath if zipalignpath else "zipalign.exe"
+        self.heapsizexms = str(heapsizexms) if heapsizexms else None
+        self.heapsizexmx = str(heapsizexmx) if heapsizexmx else None
+        createdirectory(self.directory, overwriteifexists=False)
+        createdirectory(self.defaultdecompilepath, overwriteifexists=False)
 
+    @staticmethod
+    def _command(*args):
+        return subprocess.Popen(args, shell=True).wait()
+
+    def decompile(self, apkpath, outputpath=None, overwriteifexists=True, cancelifexists=False):
+        """
+
+        Decompiles an apk
+
+        """
+        raise NotImplementedError("decompile function not implemented")
+        if os.path.isdir(apkpath):
+            raise IsADirectoryError(f"Failed to decompile apk {apkpath}: Expected apk file, "
+                                    f"got folder.")
+        if getfileextension(apkpath) != "apk":
+            raise IllegalArgumentException(f"Failed to decompile apk {apkpath}: Expected apk file, "
+                                           f"got {getfileextension(apkpath)} file.")
+        if not outputpath:
+            outputpath = self.defaultdecompilepath + removefileextension(os.path.basename(apkpath))
+        decompilepath = outputpath
+        logging.log(f"Decompiling apk {apkpath} to {decompilepath}", True, True, True)
+        assertfileexists(apkpath)
+        if os.path.isdir(decompilepath) and cancelifexists:
+            raise FolderExistsError(f"Failed to decompile apk {apkpath}: Decompiled apk already exists at path {decompilepath}")
+        if os.path.isdir(decompilepath) and not overwriteifexists:
+            logging.log(f"Decompiled apk already exists at path {decompilepath}."
+                        f" Using this decompiled apk instead of overwriting it.", True, True, special=True)
+            return
+        else:
+            logging.log(f"Overwriting decompiled apk {decompilepath}...", True, True, special=True)
+        try:
+            _command(DECOMPILEAPK)
+        except Exception:
+            removedirectory(decompilepath)
+            raise
+        logging.log(f"Successfully decompiled apk {apkpath} to {decompilepath}", True, True, True, successinfo=True)
+
+    def _zipalign(self, apkpath, outputpath, signapk=True, overwriteifexists=True, cancelifexists=False):
+        """
+
+        FIXME: Correct documentation
+        Compiles and signs a decompiled apk
+        Signs apk (after zipalinging) if signapk is True
+        Zipaligns apk (before signing) if usezipalign is True
+
+        """
+
+    def _sign(self, apkpath, outputpath, overwriteifexists=True, cancelifexists=False):
+        """
+
+        FIXME: Correct documentation
+        Compiles and signs a decompiled apk
+        Signs apk (after zipalinging) if signapk is True
+        Zipaligns apk (before signing) if usezipalign is True
+
+        """
+
+    def compile(self, decompiledapkpath, outputpath=None, signapk=True, zipalignapk=True, overwriteifexists=True,
+                cancelifexists=False):
+        """
+
+        Compiles and signs a decompiled apk
+        Signs apk (after zipalinging) if signapk is True
+        Zipaligns apk (before signing) if zipalignapk is True
+
+        """
+        # TODO: Refactor siging and zipaligning into separate functions. Can sign, or zipalign (which both zipaligns
+        # and does the signing itself by internally calling _sign)
+        raise NotImplementedError("compile function not implemented")
+        if not outputpath:
+            outputpath = self.defaultcompilepath + os.path.basename(decompiledapkpath)
+        compilepath = os.path.join(os.path.dirname(outputpath),
+                                   f"temp_{os.path.basename(outputpath)}")
+        logging.log(f"Compiling apk {decompiledapkpath} to {compilepath}", True, True, True)
+        assertfolderexists(decompiledapkpath)
+        # if os.path.isfile(compilepath):
+        #     if cancelifexists:
+        #         raise FolderExistsError(f"Failed to compile apk {decompiledapkpath}: APK already exists at path"
+        #                             f" {compilepath}")
+        #     elif not overwriteifexists:
+        #         logging.log(f"APK already exists at path {compilepath}. Aborting compilation...", True, True,
+        #                     special=True)
+        #     else:
+        #         logging.log(f"Overwriting compiled apk {compilepath}...", True, True, special=True)
+        if os.path.isfile(compilepath) and overwriteifexists:
+            logging.log(f"Overwriting compiled apk at path {compilepath}...", True, True, special=True)
+            skipcompile = False
+        elif os.path.isfile(compilepath) and cancelifexists:
+            raise FolderExistsError(f"Failed to compile apk {decompiledapkpath}: APK already exists at path"
+                                    f" {compilepath}")
+        elif os.path.isfile(compilepath) and not overwriteifexists:
+                logging.log(f"APK already exists at path {compilepath}. Aborting compilation...", True, True,
+                            special=True)
+                skipcompile = True
+        else:
+            skipcompile = False
+        if not skipcompile:
+            try:
+                _command(COMPILEAPK)
+            except Exception:
+                removefile(compilepath)
+                raise
+            else:
+                logging.log(f"Successfully compiled apk {decompiledapkpath} to {compilepath}", True, True, True,
+                    successinfo=True)
+        if zipalignapk:
+            try:
+                zipalignpath = f"{compilepath}_zipaligned"
+                if os.path.isfile(zipalignpath) and overwriteifexists:
+                    logging.log(f"Overwriting zipaligned apk at path {zipalignpath}...", True, True, special=True)
+                    skipzipalign = False
+                elif os.path.isfile(zipalignpath) and cancelifexists:
+                    raise FolderExistsError(f"Failed to zipalign apk {decompiledapkpath}: APK already exists at path"
+                                            f" {zipalignpath}")
+                elif os.path.isfile(zipalignpath) and not overwriteifexists:
+                    logging.log(f"APK already exists at path {zipalignpath}. Aborting zipaligning...", True, True,
+                                special=True)
+                    skipzipalign = True
+                else:
+                    skipzipalign = False
+                if not skipzipalign:
+                    try:
+                        _command(ZIPALIGNAPK)
+                    except Exception:
+                        removefile(compilepath)
+                        raise
+                    else:
+                        logging.log(f"Successfully zipaligned apk {compilepath} to {zipalignpath}", True, True, True,
+                                    successinfo=True)
+            finally:
+                # Delete temp APK file, whether we zipaligned or skipped it
+                removefile(compilepath)
+
+
+if platform.system() != "Windows":
+    raise OSError("Sorry, this tool is only compatible with Windows")
 
 logging = Logging(colorized=True,
                   printwarnings=True,
@@ -645,8 +862,8 @@ logging = Logging(colorized=True,
                   printveryimportant=True,
                   printsuperimportant=True,
                   printspecial=True,
-                  donotprintspecial=False,
                   donotprintsuccessinfo=False,
+                  overridedonotprintifspecial=True,
                   printall=True,
                   printnone=False
                   )

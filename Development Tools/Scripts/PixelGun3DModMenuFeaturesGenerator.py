@@ -79,7 +79,7 @@ def generatecategories(features):
         featnum = feature["FeatNum"]
         try:
             name = feature["Name"]
-        except:
+        except Exception:
             print(feature)
             raise BaseException(log)
         strippedname = feature["Type"] + "_" + feature["Name"].replace("Don't","Disable").replace("don't","disable").title().replace(" ","").replace("\t","").replace("\"","").replace("'","").replace("-","").replace(".","").replace(",","").replace(";","").replace("\\","").replace("/","").replace("$","").replace("#","").replace("!","").replace("@","").replace("%","").replace("^","").replace("*","").replace(")","").replace("(","").replace("[","").replace("]","").replace("`","").replace(":","")
