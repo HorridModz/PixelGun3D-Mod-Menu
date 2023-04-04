@@ -721,7 +721,7 @@ class APKEasyTool:
 
     @staticmethod
     def _command(*args):
-        return subprocess.Popen(args, shell=True).wait()
+        return subprocess.check_output(args, shell=False)
 
     def decompile(self, apkpath, outputpath=None, overwriteifexists=True, cancelifexists=False):
         """
